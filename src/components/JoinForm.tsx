@@ -11,17 +11,23 @@ export default function JoinForm() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const supaReady = !!supabase;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
+    if (!supaReady) {
+      setMsg("Temporarily offline: database not configured.");
+      return;
+    }
     if (!fullName.trim() || !email.trim() || !agree) {
       setMsg("Please enter your name, email, and check the waiver box.");
       return;
     }
     setBusy(true);
     try {
-      // 1) insert member (upsert by email)
-      const { data: existing, error: selErr } = await supabase
+      // upsert member by preferred_email
+      const { data: existing, error: selErr } = await supabase!
         .from("members")
         .select("id")
         .eq("preferred_email", email)
@@ -30,7 +36,7 @@ export default function JoinForm() {
 
       let memberId = existing?.id;
       if (!memberId) {
-        const { data: ins, error: insErr } = await supabase
+        const { data: ins, error: insErr } = await supabase!
           .from("members")
           .insert({ full_name: fullName, preferred_email: email })
           .select("id")
@@ -39,27 +45,20 @@ export default function JoinForm() {
         memberId = ins.id;
       }
 
-      // 2) insert waiver row
-      const { error: wErr } = await supabase
+      const { error: wErr } = await supabase!
         .from("waivers")
         .insert({ member_id: memberId, agreed: true, signature_name: fullName });
       if (wErr) throw wErr;
 
-      // 3) Optional: call your Google Apps Script to email a PDF/receipt
-      const hook = import.meta.env.VITE_GAS_WEBHOOK_URL;
+      const hook = (import.meta as any).env?.VITE_GAS_WEBHOOK_URL;
       if (hook) {
         try {
           await fetch(hook, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              fullName,
-              email,
-              club: "Atlas Ski & Snowboard Club",
-              waiverAgreed: true
-            })
+            body: JSON.stringify({ fullName, email, club: "Atlas Ski & Snowboard Club", waiverAgreed: true })
           });
-        } catch { /* ignore network errors */ }
+        } catch {/* ignore */}
       }
 
       setMsg("You're in! Check your email for a receipt (if provided).");
@@ -73,6 +72,11 @@ export default function JoinForm() {
 
   return (
     <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, maxWidth: 560 }}>
+      {!supaReady && (
+        <div style={{ padding: 12, borderRadius: 12, background: "#fff7ed", color: "#9a3412" }}>
+          Database not connected yet—form is in preview mode. Ask the admin to add env vars.
+        </div>
+      )}
       {msg && <div style={{ padding: 12, borderRadius: 12, background: "#ecfeff", color: "#155e75" }}>{msg}</div>}
 
       <div>
@@ -87,13 +91,14 @@ export default function JoinForm() {
 
       <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 14, color: "#334155" }}>
         <input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} />
-        <span>
-          I have read and agree to the club waiver. (A copy will be emailed to me.)
-        </span>
+        <span>I have read and agree to the club waiver.</span>
       </label>
 
-      <button disabled={busy} style={{ ...btn, background: busy ? "#e5e7eb" : "#0f172a", color: "#fff" }}>
-        {busy ? "Submitting…" : "Join & Sign Waiver"}
+      <button
+        disabled={busy || !supaReady}
+        style={{ ...btn, background: busy || !supaReady ? "#e5e7eb" : "#0f172a", color: "#fff" }}
+      >
+        {busy ? "Submitting…" : (supaReady ? "Join & Sign Waiver" : "Join (preview)")}
       </button>
     </form>
   );
